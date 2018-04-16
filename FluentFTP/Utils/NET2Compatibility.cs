@@ -4,7 +4,7 @@ using System.Text;
 
 #region Extension Methods for .NET 2
 
-#if NET2
+#if NET20
 
 // you need this once (only), and it must be in this namespace
 namespace System.Runtime.CompilerServices {
@@ -15,11 +15,27 @@ namespace System.Runtime.CompilerServices {
 
 #endif
 
+#if NET20 || NET35 || NET40
+
+/// <summary>
+/// To support progress reporting in .NET 3.5 and .NET 4.0
+/// </summary>
+public interface IProgress<T> {
+
+	/// <summary>
+	/// To support progress reporting in .NET 3.5 and .NET 4.0
+	/// </summary>
+	void Report(T value);
+
+}
+
+#endif
+
 #endregion
 
 #region LINQBridge - LINQ for .NET 2
 
-#if NET2
+#if NET20
 
 // LINQBridge
 // Atif Aziz, Joseph Albahari. All rights reserved.

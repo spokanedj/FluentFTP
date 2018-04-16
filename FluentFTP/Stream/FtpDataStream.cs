@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 using System.Diagnostics;
 using System.Threading;
 
-#if NETFX45
+#if ASYNC
 using System.Threading.Tasks;
 #endif
 
@@ -81,7 +81,7 @@ namespace FluentFTP {
 			return read;
 		}
 
-#if NETFX45
+#if ASYNC
         /// <summary>
         /// Reads data off the stream asynchronously
         /// </summary>
@@ -108,7 +108,7 @@ namespace FluentFTP {
 			m_position += count;
 		}
 
-#if NETFX45
+#if ASYNC
         /// <summary>
         /// Writes data to the stream asynchronously
         /// </summary>
@@ -140,21 +140,6 @@ namespace FluentFTP {
 		}
 
 		/// <summary>
-		/// Disconnects (if necessary) and releases associated resources
-		/// </summary>
-		/// <param name="disposing">Disposing</param>
-		protected override void Dispose(bool disposing) {
-			if (disposing) {
-				if (IsConnected)
-					Close();
-
-				m_control = null;
-			}
-
-			base.Dispose(disposing);
-		}
-
-		/// <summary>
 		/// Closes the connection and reads the server's reply
 		/// </summary>
 		public new FtpReply Close() {
@@ -175,7 +160,7 @@ namespace FluentFTP {
 		/// Creates a new data stream object
 		/// </summary>
 		/// <param name="conn">The control connection to be used for carrying out this operation</param>
-		public FtpDataStream(FtpClient conn) {
+		public FtpDataStream(FtpClient conn) : base(conn.SslProtocols) {
 			if (conn == null)
 				throw new ArgumentException("The control connection cannot be null.");
 
@@ -183,7 +168,7 @@ namespace FluentFTP {
 			// always accept certificate no matter what because if code execution ever
 			// gets here it means the certificate on the control connection object being
 			// cloned was already accepted.
-			ValidateCertificate += new FtpSocketStreamSslValidation(delegate(FtpSocketStream obj, FtpSslValidationEventArgs e) {
+			ValidateCertificate += new FtpSocketStreamSslValidation(delegate (FtpSocketStream obj, FtpSslValidationEventArgs e) {
 				e.Accept = true;
 			});
 
@@ -195,9 +180,9 @@ namespace FluentFTP {
 		/// </summary>
 		~FtpDataStream() {
 			try {
-				Dispose();
+				Dispose(false);
 			} catch (Exception ex) {
-				FtpTrace.WriteLine(FtpTraceLevel.Warn, "[Finalizer] Caught and discarded an exception while disposing the FtpDataStream: "+ ex.ToString());
+				FtpTrace.WriteLine(FtpTraceLevel.Warn, "[Finalizer] Caught and discarded an exception while disposing the FtpDataStream: " + ex.ToString());
 			}
 		}
 	}

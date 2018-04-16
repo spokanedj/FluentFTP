@@ -19,7 +19,7 @@ using System.Web;
 #if (CORE || NETFX)
 using System.Threading;
 #endif
-#if NETFX45
+#if ASYNC
 using System.Threading.Tasks;
 #endif
 
@@ -91,7 +91,7 @@ namespace FluentFTP {
 			FtpHashAlgorithm type = FtpHashAlgorithm.NONE;
 
 #if !CORE14
-            lock (m_lock) {
+			lock (m_lock) {
 #endif
 				if ((reply = Execute("OPTS HASH")).Success) {
 					switch (reply.Message) {
@@ -110,13 +110,12 @@ namespace FluentFTP {
 					}
 				}
 #if !CORE14
-            }
+			}
 #endif
 
 			return type;
 		}
 
-#if !CORE
 		delegate FtpHashAlgorithm AsyncGetHashAlgorithm();
 
 		/// <summary>
@@ -150,8 +149,7 @@ namespace FluentFTP {
 			return GetAsyncDelegate<AsyncGetHashAlgorithm>(ar).EndInvoke(ar);
 		}
 
-#endif
-#if NETFX45
+#if ASYNC
 		/// <summary>
 		/// Gets the currently selected hash algorithm for the HASH command asynchronously.
 		/// </summary>
@@ -188,7 +186,7 @@ namespace FluentFTP {
 			string algorithm;
 
 #if !CORE14
-            lock (m_lock) {
+			lock (m_lock) {
 #endif
 				if ((HashAlgorithms & type) != type)
 					throw new NotImplementedException(("The hash algorithm " + type.ToString() + " was not advertised by the server."));
@@ -214,11 +212,10 @@ namespace FluentFTP {
 				if (!(reply = Execute("OPTS HASH " + algorithm)).Success)
 					throw new FtpCommandException(reply);
 #if !CORE14
-            }
+			}
 #endif
 		}
 
-#if !CORE
 		delegate void AsyncSetHashAlgorithm(FtpHashAlgorithm type);
 
 		/// <summary>
@@ -257,8 +254,7 @@ namespace FluentFTP {
 			GetAsyncDelegate<AsyncSetHashAlgorithm>(ar).EndInvoke(ar);
 		}
 
-#endif
-#if NETFX45
+#if ASYNC
 		/// <summary>
 		/// Sets the hash algorithm on the server to be used with the HASH command asynchronously.
 		/// </summary>
@@ -307,12 +303,12 @@ namespace FluentFTP {
 				throw new ArgumentException("GetHash(path) argument can't be null");
 
 #if !CORE14
-            lock (m_lock) {
+			lock (m_lock) {
 #endif
 				if (!(reply = Execute("HASH " + path.GetFtpPath())).Success)
 					throw new FtpCommandException(reply);
 #if !CORE14
-            }
+			}
 #endif
 
 			// Current draft says the server should return this:
@@ -398,7 +394,7 @@ namespace FluentFTP {
 		}
 
 #endif
-#if NETFX45
+#if ASYNC
 		/// <summary>
 		/// Gets the hash of an object on the server using the currently selected hash algorithm asynchronously. 
 		/// </summary>
@@ -424,11 +420,59 @@ namespace FluentFTP {
 		/// <exception cref="NotImplementedException">Thrown when an unknown hash algorithm type is returned by the server</exception>
 		/// <returns>The hash of the file.</returns>
 		public async Task<FtpHash> GetHashAsync(string path) {
-			//TODO:  Rewrite as true async method with cancellation support
-			return await Task.Factory.FromAsync<string, FtpHash>(
-				(p, ac, s) => BeginGetHash(p, ac, s),
-				ar => EndGetHash(ar),
-				path, null);
+			//TODO:  Add cancellation support
+			FtpReply reply;
+			FtpHash hash = new FtpHash();
+			Match m;
+
+			if (path == null)
+				throw new ArgumentException("GetHash(path) argument can't be null");
+
+			if (!(reply = await ExecuteAsync("HASH " + path.GetFtpPath())).Success)
+				throw new FtpCommandException(reply);
+
+			// Current draft says the server should return this:
+			// SHA-256 0-49 169cd22282da7f147cb491e559e9dd filename.ext
+			if (!(m = Regex.Match(reply.Message,
+					@"(?<algorithm>.+)\s" +
+					@"(?<bytestart>\d+)-(?<byteend>\d+)\s" +
+					@"(?<hash>.+)\s" +
+					@"(?<filename>.+)")).Success)
+			{
+
+				// Current version of FileZilla returns this:
+				// SHA-1 21c2ca15cf570582949eb59fb78038b9c27ffcaf 
+				m = Regex.Match(reply.Message, @"(?<algorithm>.+)\s(?<hash>.+)\s");
+			}
+
+			if (m != null && m.Success)
+			{
+				switch (m.Groups["algorithm"].Value)
+				{
+					case "SHA-1":
+						hash.Algorithm = FtpHashAlgorithm.SHA1;
+						break;
+					case "SHA-256":
+						hash.Algorithm = FtpHashAlgorithm.SHA256;
+						break;
+					case "SHA-512":
+						hash.Algorithm = FtpHashAlgorithm.SHA512;
+						break;
+					case "MD5":
+						hash.Algorithm = FtpHashAlgorithm.MD5;
+						break;
+					default:
+						throw new NotImplementedException("Unknown hash algorithm: " + m.Groups["algorithm"].Value);
+				}
+
+				hash.Value = m.Groups["hash"].Value;
+			}
+			else
+			{
+				FtpTrace.WriteStatus(FtpTraceLevel.Warn, "Failed to parse hash from: " + reply.Message);
+			}
+
+			return hash;
 		}
 #endif
 
@@ -538,7 +582,7 @@ namespace FluentFTP {
 		}
 
 #endif
-#if NETFX45
+#if ASYNC
 		/// <summary>
 		/// Retrieves a checksum of the given file using a checksum method that the server supports, if any. 
 		/// </summary>
@@ -558,10 +602,48 @@ namespace FluentFTP {
 		/// <example><code source="..\Examples\GetChecksum.cs" lang="cs" /></example>
 		/// <exception cref="FtpCommandException">The command fails</exception>
 		public async Task<FtpHash> GetChecksumAsync(string path) {
-			//TODO:  Rewrite as true async method with cancellation support
-			return await Task.Factory.FromAsync<string, FtpHash>(
-				(p, ac, s) => BeginGetChecksum(p, ac, s),
-				ar => EndGetChecksum(ar), path, null);
+			//TODO:  Add cancellation support
+			if (HasFeature(FtpCapability.HASH))
+			{
+				return await GetHashAsync(path);
+			}
+			else
+			{
+				FtpHash res = new FtpHash();
+
+				if (HasFeature(FtpCapability.MD5))
+				{
+					res.Value = await GetMD5Async(path);
+					res.Algorithm = FtpHashAlgorithm.MD5;
+				}
+				else if (HasFeature(FtpCapability.XMD5))
+				{
+					res.Value = await GetXMD5Async(path);
+					res.Algorithm = FtpHashAlgorithm.MD5;
+				}
+				else if (HasFeature(FtpCapability.XSHA1))
+				{
+					res.Value = await GetXSHA1Async(path);
+					res.Algorithm = FtpHashAlgorithm.SHA1;
+				}
+				else if (HasFeature(FtpCapability.XSHA256))
+				{
+					res.Value = await GetXSHA256Async(path);
+					res.Algorithm = FtpHashAlgorithm.SHA256;
+				}
+				else if (HasFeature(FtpCapability.XSHA512))
+				{
+					res.Value = await GetXSHA512Async(path);
+					res.Algorithm = FtpHashAlgorithm.SHA512;
+				}
+				else if (HasFeature(FtpCapability.XCRC))
+				{
+					res.Value = await GetXCRCAsync(path);
+					res.Algorithm = FtpHashAlgorithm.CRC;
+				}
+
+				return res;
+			}
 		}
 #endif
 
@@ -635,7 +717,7 @@ namespace FluentFTP {
 		}
 
 #endif
-#if NETFX45
+#if ASYNC
 		/// <summary>
 		/// Gets the MD5 hash of the specified file using MD5 asynchronously. This is a non-standard extension
 		/// to the protocol and may or may not work. A FtpCommandException will be
@@ -645,10 +727,19 @@ namespace FluentFTP {
 		/// <returns>Server response, presumably the MD5 hash.</returns>
 		/// <exception cref="FtpCommandException">The command fails</exception>
 		public async Task<string> GetMD5Async(string path) {
-			return await Task.Factory.FromAsync<string, string>(
-				(p, ac, s) => BeginGetMD5(p, ac, s),
-				ar => EndGetMD5(ar),
-				path, null);
+			FtpReply reply;
+			string response;
+
+			if (!(reply = await ExecuteAsync("MD5 " + path)).Success)
+				throw new FtpCommandException(reply);
+
+			response = reply.Message;
+			if (response.StartsWith(path))
+			{
+				response = response.Remove(0, path.Length).Trim();
+			}
+
+			return response;
 		}
 #endif
 		#endregion
@@ -713,7 +804,7 @@ namespace FluentFTP {
 		}
 
 #endif
-#if NETFX45
+#if ASYNC
 		/// <summary>
 		/// Gets the CRC hash of the specified file using XCRC asynchronously. This is a non-standard extension
 		/// to the protocol and may or may not work. A FtpCommandException will be
@@ -723,9 +814,19 @@ namespace FluentFTP {
 		/// <returns>Server response, presumably the CRC hash.</returns>
 		/// <exception cref="FtpCommandException">The command fails</exception>
 		public async Task<string> GetXCRCAsync(string path) {
-			return await Task.Factory.FromAsync<string, string>(
-				(p, ac, s) => BeginGetXCRC(p, ac, s),
-				ar => EndGetXCRC(ar), path, null);
+			FtpReply reply;
+			string response;
+
+			if (!(reply = await ExecuteAsync("MD5 " + path)).Success)
+				throw new FtpCommandException(reply);
+
+			response = reply.Message;
+			if (response.StartsWith(path))
+			{
+				response = response.Remove(0, path.Length).Trim();
+			}
+
+			return response;
 		}
 #endif
 
@@ -791,7 +892,7 @@ namespace FluentFTP {
 		}
 
 #endif
-#if NETFX45
+#if ASYNC
 		/// <summary>
 		/// Gets the MD5 hash of the specified file using XMD5 asynchronously. This is a non-standard extension
 		/// to the protocol and may or may not work. A FtpCommandException will be
@@ -801,9 +902,12 @@ namespace FluentFTP {
 		/// <returns>Server response, presumably the MD5 hash.</returns>
 		/// <exception cref="FtpCommandException">The command fails</exception>
 		public async Task<string> GetXMD5Async(string path) {
-			return await Task.Factory.FromAsync<string, string>(
-				(p, ac, s) => BeginGetXMD5(p, ac, s),
-				ar => EndGetXMD5(ar), path, null);
+			FtpReply reply;
+
+			if (!(reply = await ExecuteAsync("XMD5 " + path)).Success)
+				throw new FtpCommandException(reply);
+
+			return reply.Message;
 		}
 #endif
 
@@ -869,7 +973,7 @@ namespace FluentFTP {
 		}
 
 #endif
-#if NETFX45
+#if ASYNC
 		/// <summary>
 		/// Gets the SHA-1 hash of the specified file using XSHA1 asynchronously. This is a non-standard extension
 		/// to the protocol and may or may not work. A FtpCommandException will be
@@ -879,10 +983,12 @@ namespace FluentFTP {
 		/// <returns>Server response, presumably the SHA-1 hash.</returns>
 		/// <exception cref="FtpCommandException">The command fails</exception>
 		public async Task<string> GetXSHA1Async(string path) {
-			return await Task.Factory.FromAsync<string, string>(
-				(p, ac, s) => BeginGetXSHA1(p, ac, s),
-				ar => EndGetXSHA1(ar),
-				path, null);
+			FtpReply reply;
+
+			if (!(reply = await ExecuteAsync("XSHA1 " + path)).Success)
+				throw new FtpCommandException(reply);
+
+			return reply.Message;
 		}
 #endif
 
@@ -949,7 +1055,7 @@ namespace FluentFTP {
 		}
 
 #endif
-#if NETFX45
+#if ASYNC
 		/// <summary>
 		/// Gets the SHA-256 hash of the specified file using XSHA256 asynchronously. This is a non-standard extension
 		/// to the protocol and may or may not work. A FtpCommandException will be
@@ -959,10 +1065,12 @@ namespace FluentFTP {
 		/// <returns>Server response, presumably the SHA-256 hash.</returns>
 		/// <exception cref="FtpCommandException">The command fails</exception>
 		public async Task<string> GetXSHA256Async(string path) {
-			return await Task.Factory.FromAsync<string, string>(
-				(p, ac, s) => BeginGetXSHA256(p, ac, s),
-				ar => EndGetXSHA256(ar),
-				path, null);
+			FtpReply reply;
+
+			if (!(reply = await ExecuteAsync("XSHA256 " + path)).Success)
+				throw new FtpCommandException(reply);
+
+			return reply.Message;
 		}
 #endif
 
@@ -1029,7 +1137,7 @@ namespace FluentFTP {
 		}
 
 #endif
-#if NETFX45
+#if ASYNC
 		/// <summary>
 		/// Gets the SHA-512 hash of the specified file using XSHA512 asynchronously. This is a non-standard extension
 		/// to the protocol and may or may not work. A FtpCommandException will be
@@ -1039,9 +1147,13 @@ namespace FluentFTP {
 		/// <returns>Server response, presumably the SHA-512 hash.</returns>
 		/// <exception cref="FtpCommandException">The command fails</exception>
 		public async Task<string> GetXSHA512Async(string path) {
-			return await Task.Factory.FromAsync<string, string>(
-				(p, ac, s) => BeginGetXSHA512(p, ac, s),
-				ar => EndGetXSHA512(ar), path, null);
+			FtpReply reply;
+
+			if (!(reply = await ExecuteAsync("XSHA512 " + path)).Success)
+				throw new FtpCommandException(reply);
+
+			return reply.Message;
+
 		}
 #endif
 		#endregion
